@@ -316,7 +316,7 @@ static void config_ADC_TEMP(void){
 	afec_set_trigger(AFEC0, AFEC_TRIG_SW);
 
 	/* configura call back */
-	afec_set_callback(AFEC0, AFEC_INTERRUPT_EOC_5,	AFEC_Temp_callback, 1);
+	afec_set_callback(AFEC0, AFEC_INTERRUPT_EOC_0,	AFEC_Temp_callback, 1);
 
 	/*** Configuracao espec?fica do canal AFEC ***/
 	struct afec_ch_config afec_ch_cfg;
@@ -539,6 +539,7 @@ void mxt_handler(struct mxt_device *device, uint *x, uint *y)
  AFEC_Temp_callback(void)
 {
 	uint ul_value = afec_channel_get_value(AFEC0, AFEC_CHANNEL_POT);
+	printf("%d",ul_value);
 	xQueueSendFromISR( xQueueTemp, &ul_value, NULL);           /* send mesage to queue */
 
 }
@@ -606,7 +607,7 @@ void task_lcd(void){
    ar.data);
   
   touchData touch;
-  uint32_t ul_value;
+  uint32_t ul_value = 0;
   char buffert_temp[200];
   sprintf(buffert_temp, "%d", ul_value);
   font_draw_text(&digital52, buffert_temp, 20, 220, 1);
@@ -614,7 +615,7 @@ void task_lcd(void){
   while (true) {  
      if (xQueueReceive( xQueueTouch, &(touch), ( TickType_t )  500 / portTICK_PERIOD_MS)) {
        update_screen(touch.x, touch.y);
-       printf("x:%d y:%d\n", touch.x, touch.y);
+       //printf("x:%d y:%d\n", touch.x, touch.y);
      }  
 	 if (xQueueReceive( xQueueTemp, &(ul_value), ( TickType_t )  2000 / portTICK_PERIOD_MS)) {
 		 sprintf(buffert_temp, "%d", ul_value);
