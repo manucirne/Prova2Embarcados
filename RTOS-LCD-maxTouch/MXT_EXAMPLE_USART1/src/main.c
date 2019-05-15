@@ -176,7 +176,7 @@ typedef struct {
 } touchData;
 
 QueueHandle_t xQueueTouch, xQueueTemp;
-SemaphoreHandle_t xSemaphoreS, xSemaphoreD;
+SemaphoreHandle_t xSemaphoreS;
 
 /************************************************************************/
 /* handler/callbacks                                                    */
@@ -186,8 +186,8 @@ SemaphoreHandle_t xSemaphoreS, xSemaphoreD;
 static void Button1_Handler(uint32_t id, uint32_t mask)
 {
 	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-	xSemaphoreGiveFromISR(xSemaphoreD, &xHigherPriorityTaskWoken);
-	duty -= 1;
+	xSemaphoreGiveFromISR(xSemaphoreS, &xHigherPriorityTaskWoken);
+	duty-= 10;
 	printf("handler 1");
 	
 }
@@ -196,7 +196,7 @@ static void Button2_Handler(uint32_t id, uint32_t mask)
 {
 	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 	xSemaphoreGiveFromISR(xSemaphoreS, &xHigherPriorityTaskWoken);
-	duty += 1;
+	duty += 10;
 	printf("handler 2");
 }
 
@@ -206,9 +206,9 @@ static void Button2_Handler(uint32_t id, uint32_t mask)
 static void AFEC_Temp_callback(void)
 {
 	g_ul_value = afec_channel_get_value(AFEC0, AFEC_CHANNEL_TEMP_SENSOR);
-	g_ul_value = (g_ul_value*100)/4096;
+	g_ul_value = (g_ul_value*100)/4095;
 	xQueueSendFromISR( xQueueTemp, &g_ul_value, NULL);
-	printf("%d\n", g_ul_value);
+	printf("callaback - %d\n", g_ul_value);
 }
 
 /************************************************************************/
@@ -273,7 +273,7 @@ void PWM0_init(uint channel, uint duty){
 		.ul_clkb = 0,
 		.ul_mck = sysclk_get_peripheral_hz()
 	};
-
+	
 	pwm_init(PWM0, &clock_setting);
 
 	/* Initialize PWM channel for LED0 */
@@ -293,29 +293,30 @@ void PWM0_init(uint channel, uint duty){
 	/* Enable PWM channels for LEDs */
 	pwm_channel_enable(PWM0, channel);
 }
+
 void BUT_init(void){
 	/* config. pino botao em modo de entrada */
 	pmc_enable_periph_clk(BUT_PIO_ID1);
-	//pmc_enable_periph_clk(BUT_PIO_ID2);
+	pmc_enable_periph_clk(BUT_PIO_ID2);
 	
 	pio_set_input(BUT_PIO1, BUT_PIN_MASK1, PIO_PULLUP | PIO_DEBOUNCE);
-	//pio_set_input(BUT_PIO2, BUT_PIN_MASK2, PIO_PULLUP | PIO_DEBOUNCE);
+	pio_set_input(BUT_PIO2, BUT_PIN_MASK2, PIO_PULLUP | PIO_DEBOUNCE);
 
 	/* config. interrupcao em borda de descida no botao do kit */
 	/* indica funcao (but_Handler) a ser chamada quando houver uma interrup??o */
 	pio_enable_interrupt(BUT_PIO1, BUT_PIN_MASK1);
-	//pio_enable_interrupt(BUT_PIO2, BUT_PIN_MASK2);
+	pio_enable_interrupt(BUT_PIO2, BUT_PIN_MASK2);
 	
 	pio_handler_set(BUT_PIO1, BUT_PIO_ID1, BUT_PIN_MASK1, PIO_IT_FALL_EDGE, Button1_Handler);
-	//pio_handler_set(BUT_PIO2, BUT_PIO_ID2, BUT_PIN_MASK2, PIO_IT_FALL_EDGE, Button2_Handler);
+	pio_handler_set(BUT_PIO2, BUT_PIO_ID2, BUT_PIN_MASK2, PIO_IT_FALL_EDGE, Button2_Handler);
 
 	/* habilita interrup?c?o do PIO que controla o botao */
 	/* e configura sua prioridade                        */
 	NVIC_EnableIRQ(BUT_PIO_ID1);
-	//NVIC_EnableIRQ(BUT_PIO_ID2);
+	NVIC_EnableIRQ(BUT_PIO_ID2);
 	
 	NVIC_SetPriority(BUT_PIO_ID1, 7);
-	//NVIC_SetPriority(BUT_PIO_ID2, 7);
+	NVIC_SetPriority(BUT_PIO_ID2, 7);
 };
 
 static void configure_lcd(void){
@@ -588,24 +589,24 @@ void task_mxt(void){
 
 void task_lcd(void){
   xQueueTouch = xQueueCreate( 10, sizeof( touchData ) );
-  xSemaphoreS = xSemaphoreCreateBinary();
-  xSemaphoreD = xSemaphoreCreateBinary();
+  
 	configure_lcd();
+	xSemaphoreS = xSemaphoreCreateBinary();
+	BUT_init();
+	
    /* Configura pino para ser controlado pelo PWM */
   pmc_enable_periph_clk(ID_PIO_PWM_0);
   pio_set_peripheral(PIO_PWM_0, PIO_PERIPH_A, MASK_PIN_PWM_0 );
   
   /* inicializa PWM*/
   PWM0_init(0, duty);
+  
   draw_screen();
-  //draw_button(0);
+
   if (xSemaphoreS == NULL)
 		printf("falha em criar o semaforoS \n");
 		
-  if (xSemaphoreD == NULL)
-		printf("falha em criar o semaforoD \n");
   
-    // Escreve HH:MM no LCD
     font_draw_text(&digital52, "HH:MM", 20, 20, 1);
     ili9488_set_foreground_color(COLOR_CONVERT(COLOR_BLACK));
     ili9488_draw_line(0,200,320,200);
@@ -633,34 +634,49 @@ void task_lcd(void){
 	char buffert_temp[200];
 	char buffert_pwm[200];
 	int ul_value;
-	
-	PWM0_init(0, duty);
+
 	
     
   while (true) {  
-	  /*sprintf(buffert_temp, "%d", g_ul_value);
-		font_draw_text(&digital52, buffert_temp, 20, 220, 1);*/
-		if( xSemaphoreTake(xSemaphoreD, ( TickType_t ) 500) == pdTRUE ){
-			  pwm_channel_update_duty(PWM0, &g_pwm_channel_led, 100-duty);
-		}
+
 		if( xSemaphoreTake(xSemaphoreS, ( TickType_t ) 500) == pdTRUE ){
+			if (duty > 100){
+				duty = 100;
+			}
+			if (duty < 0){
+				duty = 0;	
+			}
 			  pwm_channel_update_duty(PWM0, &g_pwm_channel_led, duty);
+			  if(duty < 10){
+				  sprintf(buffert_pwm, "   %d %%", duty);
+			  }
+			  else if(duty < 100){
+				  sprintf(buffert_pwm, "  %d %%", duty);
+			  }
+			  else{
+				  sprintf(buffert_pwm, "%d %", duty);
+			  }
+			  
+			  font_draw_text(&digital52, buffert_pwm,  160, 330, 1);
 		}
-		
-		
-		sprintf(buffert_pwm, "%d %%", duty);
-		font_draw_text(&digital52, buffert_pwm,  170, 330, 1);
+	
      if (xQueueReceive( xQueueTouch, &(touch), ( TickType_t )  500 / portTICK_PERIOD_MS)) {
        //update_screen(touch.x, touch.y);
        printf("x:%d y:%d\n", touch.x, touch.y);
      }  
 	 if (xQueueReceive( xQueueTemp, &(ul_value), ( TickType_t )  2000 / portTICK_PERIOD_MS)) {
-		 sprintf(buffert_temp, "%d", ul_value);
+		 if(ul_value < 10){
+			 sprintf(buffert_temp, "   %d C", ul_value);
+		 }
+		 else if(ul_value < 100){
+			 sprintf(buffert_temp, "  %d C", ul_value);
+		 }
+		 else{
+			 sprintf(buffert_temp, "%d  C", ul_value);
+		 }
 		 font_draw_text(&digital52, buffert_temp, 20, 220, 1);
 		 printf("%d\n", ul_value);
 	 } 
-
- 
   }	 
 }
 
@@ -670,9 +686,9 @@ void task_afec(void){
   config_ADC_TEMP();
   
   while (true) {
-    printf("Starting ADC\n");
+    //printf("Starting ADC\n");
     afec_start_software_conversion(AFEC0);
-    vTaskDelay(1000);
+    vTaskDelay(4000/ portTICK_PERIOD_MS);
   }
 }
 
@@ -690,10 +706,12 @@ int main(void)
 		.paritytype   = USART_SERIAL_PARITY,
 		.stopbits     = USART_SERIAL_STOP_BIT
 	};
-
+	
 	sysclk_init(); /* Initialize system clocks */
 	board_init();  /* Initialize board */
-	//BUT_init();
+	
+	duty = 0;
+	
 	
 	/* Initialize stdio on USART */
 	stdio_serial_init(USART_SERIAL_EXAMPLE, &usart_serial_options);
