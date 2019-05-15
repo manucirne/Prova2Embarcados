@@ -120,6 +120,7 @@ volatile bool g_is_conversion_done = false;
 volatile uint32_t g_ul_value = 0;
 
 volatile uint duty = 0;
+volatile uint duty1 = 0;
 
 /* Canal do sensor de temperatura */
 #define AFEC_CHANNEL_TEMP_SENSOR 0
@@ -132,6 +133,10 @@ volatile uint duty = 0;
 #define ID_PIO_PWM_0 ID_PIOA
 #define MASK_PIN_PWM_0 (1 << 0)
 
+#define PIO_PWM_1 PIOA
+#define ID_PIO_PWM_1 ID_PIOA
+#define MASK_PIN_PWM_1 (1 << 12)
+
 /** PWM frequency in Hz */
 #define PWM_FREQUENCY      1000
 /** Period value of PWM output waveform */
@@ -141,6 +146,7 @@ volatile uint duty = 0;
 
 /** PWM channel instance for LEDs */
 pwm_channel_t g_pwm_channel_led;
+pwm_channel_t g_pwm_channel_led1;
 
 /************************************************************************/
 /* RTOS                                                                  */
@@ -148,17 +154,13 @@ pwm_channel_t g_pwm_channel_led;
 #define TASK_MXT_STACK_SIZE            (4*1024/sizeof(portSTACK_TYPE))
 #define TASK_MXT_STACK_PRIORITY        (tskIDLE_PRIORITY)  
 
-#define TASK_LCD_STACK_SIZE            (4*1024/sizeof(portSTACK_TYPE))
+#define TASK_LCD_STACK_SIZE            (6*1024/sizeof(portSTACK_TYPE))
 #define TASK_LCD_STACK_PRIORITY        (tskIDLE_PRIORITY)
 
 /************************************************************************/
 /* Buts e Led                                                           */
 /************************************************************************/
 
-#define LED_PIO_ID1	   ID_PIOA
-#define LED_PIO1        PIOA
-#define LED_PIN1		   0
-#define LED_PIN_MASK1   (1<<LED_PIN1)
 
 #define BUT_PIO_ID1			  ID_PIOD
 #define BUT_PIO1			  PIOD
@@ -170,13 +172,18 @@ pwm_channel_t g_pwm_channel_led;
 #define BUT_PIN2				  31
 #define BUT_PIN_MASK2			  (1 << BUT_PIN2)
 
+#define BUT_PIO_ID3			  ID_PIOA
+#define BUT_PIO3			  PIOA
+#define BUT_PIN3			  19
+#define BUT_PIN_MASK3		  (1 << BUT_PIN3)
+
 typedef struct {
   uint x;
   uint y;
 } touchData;
 
 QueueHandle_t xQueueTouch, xQueueTemp;
-SemaphoreHandle_t xSemaphoreS;
+SemaphoreHandle_t xSemaphoreS, xSemaphoreD;
 
 /************************************************************************/
 /* handler/callbacks                                                    */
@@ -187,7 +194,7 @@ static void Button1_Handler(uint32_t id, uint32_t mask)
 {
 	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 	xSemaphoreGiveFromISR(xSemaphoreS, &xHigherPriorityTaskWoken);
-	duty-= 10;
+	duty -= 10;
 	printf("handler 1");
 	
 }
@@ -198,6 +205,20 @@ static void Button2_Handler(uint32_t id, uint32_t mask)
 	xSemaphoreGiveFromISR(xSemaphoreS, &xHigherPriorityTaskWoken);
 	duty += 10;
 	printf("handler 2");
+}
+
+static void Button3_Handler(uint32_t id, uint32_t mask)
+{
+	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+	xSemaphoreGiveFromISR(xSemaphoreD, &xHigherPriorityTaskWoken);
+	if (duty1+1 > 100){
+		duty1 = 0;
+	}
+	else{
+		duty1 += 10;
+	}
+	
+	printf("handler 3");
 }
 
 /**
@@ -294,29 +315,71 @@ void PWM0_init(uint channel, uint duty){
 	pwm_channel_enable(PWM0, channel);
 }
 
+void PWM1_init(uint channel, uint duty){
+	/* Enable PWM peripheral clock */
+	pmc_enable_periph_clk(ID_PWM0);
+
+	/* Disable PWM channels for LEDs */
+	pwm_channel_disable(PWM0, PIN_PWM_LED1_CHANNEL);
+
+	/* Set PWM clock A as PWM_FREQUENCY*PERIOD_VALUE (clock B is not used) */
+	pwm_clock_t clock_setting = {
+		.ul_clka = PWM_FREQUENCY * PERIOD_VALUE,
+		.ul_clkb = 0,
+		.ul_mck = sysclk_get_peripheral_hz()
+	};
+	
+	pwm_init(PWM0, &clock_setting);
+
+	/* Initialize PWM channel for LED0 */
+	/* Period is left-aligned */
+	g_pwm_channel_led1.alignment = PWM_ALIGN_CENTER;
+	/* Output waveform starts at a low level */
+	g_pwm_channel_led1.polarity = PWM_HIGH;
+	/* Use PWM clock A as source clock */
+	g_pwm_channel_led1.ul_prescaler = PWM_CMR_CPRE_CLKA;
+	/* Period value of output waveform */
+	g_pwm_channel_led1.ul_period = PERIOD_VALUE;
+	/* Duty cycle value of output waveform */
+	g_pwm_channel_led1.ul_duty = duty;
+	g_pwm_channel_led1.channel = channel;
+	pwm_channel_init(PWM0, &g_pwm_channel_led1);
+	
+	/* Enable PWM channels for LEDs */
+	pwm_channel_enable(PWM0, channel);
+}
+
 void BUT_init(void){
 	/* config. pino botao em modo de entrada */
 	pmc_enable_periph_clk(BUT_PIO_ID1);
 	pmc_enable_periph_clk(BUT_PIO_ID2);
+	pmc_enable_periph_clk(BUT_PIO_ID3);
 	
 	pio_set_input(BUT_PIO1, BUT_PIN_MASK1, PIO_PULLUP | PIO_DEBOUNCE);
 	pio_set_input(BUT_PIO2, BUT_PIN_MASK2, PIO_PULLUP | PIO_DEBOUNCE);
+	pio_set_input(BUT_PIO3, BUT_PIN_MASK3, PIO_PULLUP | PIO_DEBOUNCE);
 
-	/* config. interrupcao em borda de descida no botao do kit */
-	/* indica funcao (but_Handler) a ser chamada quando houver uma interrup??o */
-	pio_enable_interrupt(BUT_PIO1, BUT_PIN_MASK1);
-	pio_enable_interrupt(BUT_PIO2, BUT_PIN_MASK2);
+	
 	
 	pio_handler_set(BUT_PIO1, BUT_PIO_ID1, BUT_PIN_MASK1, PIO_IT_FALL_EDGE, Button1_Handler);
 	pio_handler_set(BUT_PIO2, BUT_PIO_ID2, BUT_PIN_MASK2, PIO_IT_FALL_EDGE, Button2_Handler);
+	pio_handler_set(BUT_PIO3, BUT_PIO_ID3, BUT_PIN_MASK3, PIO_IT_FALL_EDGE, Button3_Handler);
 
 	/* habilita interrup?c?o do PIO que controla o botao */
 	/* e configura sua prioridade                        */
 	NVIC_EnableIRQ(BUT_PIO_ID1);
 	NVIC_EnableIRQ(BUT_PIO_ID2);
+	NVIC_EnableIRQ(BUT_PIO_ID3);
 	
 	NVIC_SetPriority(BUT_PIO_ID1, 7);
 	NVIC_SetPriority(BUT_PIO_ID2, 7);
+	NVIC_SetPriority(BUT_PIO_ID3, 7);
+	
+	/* config. interrupcao em borda de descida no botao do kit */
+	/* indica funcao (but_Handler) a ser chamada quando houver uma interrup??o */
+	pio_enable_interrupt(BUT_PIO1, BUT_PIN_MASK1);
+	pio_enable_interrupt(BUT_PIO2, BUT_PIN_MASK2);
+	pio_enable_interrupt(BUT_PIO3, BUT_PIN_MASK3);
 };
 
 static void configure_lcd(void){
@@ -592,18 +655,25 @@ void task_lcd(void){
   
 	configure_lcd();
 	xSemaphoreS = xSemaphoreCreateBinary();
+	xSemaphoreD = xSemaphoreCreateBinary();
 	BUT_init();
 	
    /* Configura pino para ser controlado pelo PWM */
   pmc_enable_periph_clk(ID_PIO_PWM_0);
   pio_set_peripheral(PIO_PWM_0, PIO_PERIPH_A, MASK_PIN_PWM_0 );
+  pmc_enable_periph_clk(ID_PIO_PWM_0);
+  pio_set_peripheral(PIO_PWM_0, PIO_PERIPH_B, MASK_PIN_PWM_1 );
   
   /* inicializa PWM*/
   PWM0_init(0, duty);
+  PWM1_init(1, duty1);
   
   draw_screen();
 
-  if (xSemaphoreS == NULL)
+	if (xSemaphoreS == NULL)
+		printf("falha em criar o semaforoS \n");
+	
+	if (xSemaphoreD == NULL)
 		printf("falha em criar o semaforoS \n");
 		
   
@@ -633,6 +703,7 @@ void task_lcd(void){
 	
 	char buffert_temp[200];
 	char buffert_pwm[200];
+	char buffert_pwm1[200];
 	int ul_value;
 
 	
@@ -646,7 +717,7 @@ void task_lcd(void){
 			if (duty < 0){
 				duty = 0;	
 			}
-			  pwm_channel_update_duty(PWM0, &g_pwm_channel_led, duty);
+			  pwm_channel_update_duty(PWM0, &g_pwm_channel_led, 100 - duty);
 			  if(duty < 10){
 				  sprintf(buffert_pwm, "   %d %%", duty);
 			  }
@@ -658,8 +729,24 @@ void task_lcd(void){
 			  }
 			  
 			  font_draw_text(&digital52, buffert_pwm,  160, 330, 1);
+			  
 		}
-	
+		
+		if( xSemaphoreTake(xSemaphoreD, ( TickType_t ) 500) == pdTRUE ){
+			pwm_channel_update_duty(PWM0, &g_pwm_channel_led1, 100 - duty1);
+			if(duty1 < 10){
+				sprintf(buffert_pwm1, "   %d %%", duty1);
+			}
+			else if(duty1 < 100){
+				sprintf(buffert_pwm1, "  %d %%", duty1);
+			}
+			else{
+				sprintf(buffert_pwm1, "%d %", duty1);
+			}
+			
+			font_draw_text(&digital52, buffert_pwm1,  160, 400, 1);
+		}
+	 
      if (xQueueReceive( xQueueTouch, &(touch), ( TickType_t )  500 / portTICK_PERIOD_MS)) {
        //update_screen(touch.x, touch.y);
        printf("x:%d y:%d\n", touch.x, touch.y);
@@ -676,6 +763,22 @@ void task_lcd(void){
 		 }
 		 font_draw_text(&digital52, buffert_temp, 20, 220, 1);
 		 printf("%d\n", ul_value);
+		 if(ul_value <= 10){
+			 ili9488_set_foreground_color(COLOR_CONVERT(COLOR_BLUE));
+			ili9488_draw_filled_rectangle(224,229,230,266);
+		 }
+		 else if((ul_value > 10) && (ul_value < 30)){
+			 ili9488_set_foreground_color(COLOR_CONVERT(COLOR_YELLOW));
+			 ili9488_draw_filled_rectangle(224,229,230,266);
+		 }
+		 else if((ul_value >= 30) && (ul_value < 60)){
+			 ili9488_set_foreground_color(COLOR_CONVERT(COLOR_ORANGE));
+			 ili9488_draw_filled_rectangle(224,229,230,266);
+		 }
+		 else if((ul_value >= 60) && (ul_value <= 100)){
+			 ili9488_set_foreground_color(COLOR_CONVERT(COLOR_RED));
+			 ili9488_draw_filled_rectangle(224,229,230,266);
+		 }
 	 } 
   }	 
 }
