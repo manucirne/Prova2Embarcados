@@ -122,6 +122,20 @@ volatile uint32_t g_ul_value = 0;
 volatile uint duty = 0;
 volatile uint duty1 = 0;
 
+
+//RTC
+
+#define YEAR        2018
+#define MONTH      3
+#define DAY         19
+#define WEEK        12
+#define HOUR        0
+#define MINUTE      0
+#define SECOND      0
+volatile uint32_t hour;
+volatile uint32_t minute;
+volatile uint32_t second;
+
 /* Canal do sensor de temperatura */
 #define AFEC_CHANNEL_TEMP_SENSOR 0
 
@@ -188,6 +202,37 @@ SemaphoreHandle_t xSemaphoreS, xSemaphoreD;
 /************************************************************************/
 /* handler/callbacks                                                    */
 /************************************************************************/
+
+void RTC_Handler(void)
+{
+	uint32_t ul_status = rtc_get_status(RTC);
+
+	/*
+	*  Verifica por qual motivo entrou
+	*  na interrupcao, se foi por segundo
+	*  ou Alarm
+	*/
+	if ((ul_status & RTC_SR_SEC) == RTC_SR_SEC) {
+		rtc_clear_status(RTC, RTC_SCCR_SECCLR);
+	}
+	
+	/* Time or date alarm */
+	if ((ul_status & RTC_SR_ALARM) == RTC_SR_ALARM) {
+			rtc_clear_status(RTC, RTC_SCCR_ALRCLR);
+			
+			rtc_set_date(RTC, YEAR, MONTH, DAY, WEEK);
+			rtc_set_time(RTC, HOUR, MINUTE, SECOND);
+			
+			
+	}
+	
+	rtc_clear_status(RTC, RTC_SCCR_ACKCLR);
+	rtc_clear_status(RTC, RTC_SCCR_TIMCLR);
+	rtc_clear_status(RTC, RTC_SCCR_CALCLR);
+	rtc_clear_status(RTC, RTC_SCCR_TDERRCLR);
+	
+}
+
 
 // handlers botoes
 static void Button1_Handler(uint32_t id, uint32_t mask)
@@ -280,6 +325,28 @@ extern void vApplicationMallocFailedHook(void)
 /************************************************************************/
 /* init                                                                 */
 /************************************************************************/
+
+void RTC_init(){
+	/* Configura o PMC */
+	pmc_enable_periph_clk(ID_RTC);
+
+	/* Default RTC configuration, 24-hour mode */
+	rtc_set_hour_mode(RTC, 0);
+
+	/* Configura data e hora manualmente */
+	rtc_set_date(RTC, YEAR, MONTH, DAY, WEEK);
+	rtc_set_time(RTC, HOUR, MINUTE, SECOND);
+
+	/* Configure RTC interrupts */
+	NVIC_DisableIRQ(RTC_IRQn);
+	NVIC_ClearPendingIRQ(RTC_IRQn);
+	NVIC_SetPriority(RTC_IRQn, 0);
+	NVIC_EnableIRQ(RTC_IRQn);
+
+	/* Ativa interrupcao via alarme */
+	rtc_enable_interrupt(RTC,  RTC_IER_ALREN);
+
+}
 
 void PWM0_init(uint channel, uint duty){
 	/* Enable PWM peripheral clock */
@@ -675,41 +742,43 @@ void task_lcd(void){
 	
 	if (xSemaphoreD == NULL)
 		printf("falha em criar o semaforoS \n");
-		
-  
-    font_draw_text(&digital52, "HH:MM", 20, 20, 1);
-    ili9488_set_foreground_color(COLOR_CONVERT(COLOR_BLACK));
-    ili9488_draw_line(0,200,320,200);
     
-    ili9488_draw_pixmap(210,
+    ili9488_draw_pixmap(220,
     20,
     soneca.width,
     soneca.height,
     soneca.data);
     
-    ili9488_draw_pixmap(210,
+    ili9488_draw_pixmap(220,
     220,
     termometro.width,
     termometro.height,
     termometro.data);
     
-    ili9488_draw_pixmap(20,
-    330,
+    ili9488_draw_pixmap(220,
+    320,
     ar.width,
     ar.height,
     ar.data);
   
 	touchData touch;
 	
-	char buffert_temp[200];
-	char buffert_pwm[200];
-	char buffert_pwm1[200];
+	char buffert_temp[50];
+	char buffert_pwm[50];
+	char buffert_pwm1[50];
+	char buffert_hour[50];
 	int ul_value;
 
 	
     
   while (true) {  
-
+		
+		rtc_get_time(RTC,&hour,&minute,&second );
+		sprintf(buffert_hour,"%dh %dm",hour,minute);
+		font_draw_text(&digital52, buffert_hour , 20, 20, 1);
+		ili9488_set_foreground_color(COLOR_CONVERT(COLOR_BLACK));
+		ili9488_draw_line(0,200,320,200);
+		
 		if( xSemaphoreTake(xSemaphoreS, ( TickType_t ) 500) == pdTRUE ){
 			if (duty > 100){
 				duty = 100;
@@ -728,7 +797,7 @@ void task_lcd(void){
 				  sprintf(buffert_pwm, "%d %", duty);
 			  }
 			  
-			  font_draw_text(&digital52, buffert_pwm,  160, 330, 1);
+			  font_draw_text(&digital52, buffert_pwm,  20, 320, 1);
 			  
 		}
 		
@@ -744,7 +813,7 @@ void task_lcd(void){
 				sprintf(buffert_pwm1, "%d %", duty1);
 			}
 			
-			font_draw_text(&digital52, buffert_pwm1,  160, 400, 1);
+			font_draw_text(&digital52, buffert_pwm1,  20, 400, 1);
 		}
 	 
      if (xQueueReceive( xQueueTouch, &(touch), ( TickType_t )  500 / portTICK_PERIOD_MS)) {
@@ -765,19 +834,19 @@ void task_lcd(void){
 		 printf("%d\n", ul_value);
 		 if(ul_value <= 10){
 			 ili9488_set_foreground_color(COLOR_CONVERT(COLOR_BLUE));
-			ili9488_draw_filled_rectangle(224,229,230,266);
+			ili9488_draw_filled_rectangle(234,229,240,266);
 		 }
 		 else if((ul_value > 10) && (ul_value < 30)){
 			 ili9488_set_foreground_color(COLOR_CONVERT(COLOR_YELLOW));
-			 ili9488_draw_filled_rectangle(224,229,230,266);
+			 ili9488_draw_filled_rectangle(234,229,240,266);
 		 }
 		 else if((ul_value >= 30) && (ul_value < 60)){
 			 ili9488_set_foreground_color(COLOR_CONVERT(COLOR_ORANGE));
-			 ili9488_draw_filled_rectangle(224,229,230,266);
+			 ili9488_draw_filled_rectangle(234,229,240,266);
 		 }
 		 else if((ul_value >= 60) && (ul_value <= 100)){
 			 ili9488_set_foreground_color(COLOR_CONVERT(COLOR_RED));
-			 ili9488_draw_filled_rectangle(224,229,230,266);
+			 ili9488_draw_filled_rectangle(234,229,240,266);
 		 }
 	 } 
   }	 
