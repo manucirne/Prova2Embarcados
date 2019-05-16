@@ -124,6 +124,8 @@ volatile uint duty1 = 0;
 
 
 //RTC
+// peguei toda a confuguração do david fogelman - prova 1 - ele teve um problema
+//semelhante
 
 #define YEAR        2018
 #define MONTH      3
@@ -197,7 +199,7 @@ typedef struct {
 } touchData;
 
 QueueHandle_t xQueueTouch, xQueueTemp;
-SemaphoreHandle_t xSemaphoreS, xSemaphoreD;
+SemaphoreHandle_t xSemaphoreS, xSemaphoreD, xSemaphoreH;
 
 /************************************************************************/
 /* handler/callbacks                                                    */
@@ -214,10 +216,12 @@ void RTC_Handler(void)
 	*/
 	if ((ul_status & RTC_SR_SEC) == RTC_SR_SEC) {
 		rtc_clear_status(RTC, RTC_SCCR_SECCLR);
+		printf("entrou no sec do rtc");
 	}
 	
 	/* Time or date alarm */
 	if ((ul_status & RTC_SR_ALARM) == RTC_SR_ALARM) {
+		printf("entrou no alarm do rtc");
 			rtc_clear_status(RTC, RTC_SCCR_ALRCLR);
 			
 			rtc_set_date(RTC, YEAR, MONTH, DAY, WEEK);
@@ -724,6 +728,7 @@ void task_lcd(void){
 	xSemaphoreS = xSemaphoreCreateBinary();
 	xSemaphoreD = xSemaphoreCreateBinary();
 	BUT_init();
+	RTC_init();
 	
    /* Configura pino para ser controlado pelo PWM */
   pmc_enable_periph_clk(ID_PIO_PWM_0);
@@ -734,7 +739,8 @@ void task_lcd(void){
   /* inicializa PWM*/
   PWM0_init(0, duty);
   PWM1_init(1, duty1);
-  
+  duty1 = 0;
+  duty = 0;
   draw_screen();
 
 	if (xSemaphoreS == NULL)
@@ -742,14 +748,15 @@ void task_lcd(void){
 	
 	if (xSemaphoreD == NULL)
 		printf("falha em criar o semaforoS \n");
+
     
-    ili9488_draw_pixmap(220,
+    ili9488_draw_pixmap(230,
     20,
     soneca.width,
     soneca.height,
     soneca.data);
     
-    ili9488_draw_pixmap(220,
+    ili9488_draw_pixmap(230,
     220,
     termometro.width,
     termometro.height,
@@ -760,6 +767,9 @@ void task_lcd(void){
     ar.width,
     ar.height,
     ar.data);
+	
+	ili9488_set_foreground_color(COLOR_CONVERT(COLOR_BLACK));
+	ili9488_draw_line(0,200,320,200);
   
 	touchData touch;
 	
@@ -768,16 +778,35 @@ void task_lcd(void){
 	char buffert_pwm1[50];
 	char buffert_hour[50];
 	int ul_value;
-
+	char sec[10];
+	char min[10];
+	char hou[10];
 	
     
   while (true) {  
-		
 		rtc_get_time(RTC,&hour,&minute,&second );
-		sprintf(buffert_hour,"%dh %dm",hour,minute);
+		if(second < 10){
+			sprintf(sec,"0%d", second);
+		}
+		else{
+			sprintf(sec,"%d", second);
+		}
+		if(minute < 10){
+			sprintf(min,"0%d", minute);
+		}
+		else{
+			sprintf(min,"%d", minute);
+		}
+		if(hour < 10){
+			sprintf(hou,"0%d", hour);
+		}
+		else{
+			sprintf(hou,"%d", hour);
+		}
+		sprintf(buffert_hour,"%s:%s:%s",hou,min, sec);
 		font_draw_text(&digital52, buffert_hour , 20, 20, 1);
-		ili9488_set_foreground_color(COLOR_CONVERT(COLOR_BLACK));
-		ili9488_draw_line(0,200,320,200);
+		
+		
 		
 		if( xSemaphoreTake(xSemaphoreS, ( TickType_t ) 500) == pdTRUE ){
 			if (duty > 100){
@@ -834,19 +863,19 @@ void task_lcd(void){
 		 printf("%d\n", ul_value);
 		 if(ul_value <= 10){
 			 ili9488_set_foreground_color(COLOR_CONVERT(COLOR_BLUE));
-			ili9488_draw_filled_rectangle(234,229,240,266);
+			ili9488_draw_filled_rectangle(244,229,250,266);
 		 }
 		 else if((ul_value > 10) && (ul_value < 30)){
 			 ili9488_set_foreground_color(COLOR_CONVERT(COLOR_YELLOW));
-			 ili9488_draw_filled_rectangle(234,229,240,266);
+			 ili9488_draw_filled_rectangle(244,229,250,266);
 		 }
 		 else if((ul_value >= 30) && (ul_value < 60)){
 			 ili9488_set_foreground_color(COLOR_CONVERT(COLOR_ORANGE));
-			 ili9488_draw_filled_rectangle(234,229,240,266);
+			 ili9488_draw_filled_rectangle(244,229,250,266);
 		 }
 		 else if((ul_value >= 60) && (ul_value <= 100)){
 			 ili9488_set_foreground_color(COLOR_CONVERT(COLOR_RED));
-			 ili9488_draw_filled_rectangle(234,229,240,266);
+			 ili9488_draw_filled_rectangle(244,229,250,266);
 		 }
 	 } 
   }	 
